@@ -1,3 +1,4 @@
+from . import metrics as m
 import numpy as np
 import pandas as pd
 import qstab.data as qdata
@@ -55,3 +56,38 @@ class AnswerCollector:
         
     def to_csv(self, filepath, **kwargs):
         self.answers.to_csv(filepath, **kwargs)
+
+
+class Evaluator:
+
+    def __init__(self, dataloader, colnames=['mod_ans', 'flag', 'persona', 'true_ans', 'true_ans_text']):
+
+        self.data = dataloader.data
+        self.datalen = dataloader.len
+        self.outcome = AnswerCollector(colnames=colnames)
+
+    @classmethod
+    def prompt_format(cls, entry, addon):
+
+        entry["reference"] = None
+        # entry["prompt_prefix"] = "[Instruction]: Assume you {} Answer the question without explanation.\n[Context]: ".format(psn)
+        entry["prompt_prefix"] = "[Instruction]: {}Answer the question without explanation.\n[Context]: ".format(addon)
+        entry["prompt_suffix"] = "[Answer]: "
+        qobj = qdata.question.Question.from_dict(entry)
+        qsent = qobj.question.split('. ')[-1]
+        qobj.question = qobj.question[:-len(qsent)]
+        qobj.question = qobj.question + qsent
+
+        return qobj
+
+    def evaluate(self, i, addon, model, tokenizer):
+
+        entry_dict = self.data.iloc[i,:].to_dict()
+        qobj = self.prompt_format(entry_dict, addon)
+        answ = qobj.query(model, tokenizer, model_kwargs={"max_new_tokens":128,
+                                                        "do_sample":False,
+                                                        "pad_token_id":tokenizer.eos_token_id})
+        answ = m.split_answer(answ)
+        flag = m.soft_validate(answ, qobj.answer_idx)
+
+        return entry_dict, answ, flag
