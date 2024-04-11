@@ -1,6 +1,10 @@
+from . import texter
+import numpy as np
 import operator
 from functools import reduce
 from nltk.tokenize import sent_tokenize
+
+
 
 openai_models = ['gpt-3.5-turbo-instruct',
                  'gpt-3.5-turbo-0125',
@@ -50,14 +54,26 @@ class Prompter:
 
 class PersonaGenerator(Prompter):
 
-    def __init__(self, key_info):
+    def __init__(self, prompt, key_info):
 
-        super().__init__()
+        super().__init__(self, prompt)
         self.prompt = "Write a biography of up to {} sentences for a person who may know all the answers to the following questions. Write in the second-person voice and do not use personal names. Start with 'Assume you are ...'\n".format(key_info)
 
-    def fetcher(self, dataloader):
+    def instance_fetcher(self, dataloader, n=10):
+        """ Retrieve the instances from a dataset.
+        """
+        
+        data = dataloader.data
+        dlen = dataloader.len
+        if n < dlen:
+            inds = np.random.randint(0, dlen, size=n)
+        else:
+            inds = np.array(list(range(0, dlen)))
 
-        pass
+        textlist = data.iloc[inds]['question'].values
+        text_aggr = texter.TextAggregator().aggregate_n(textlist).text
+
+        return text_aggr
 
     def extend_prompt(self, loc, text):
 
