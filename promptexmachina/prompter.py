@@ -1,8 +1,5 @@
 from . import texter
 import numpy as np
-import operator
-from functools import reduce
-from nltk.tokenize import sent_tokenize
 
 
 
@@ -63,7 +60,7 @@ class PersonaGenerator(Prompter):
             self.prompt = prompt
 
     def instance_fetcher(self, dataloader, n=10):
-        """ Retrieve the instances from a dataset.
+        """ Retrieve n instances from a dataset.
         """
         
         data = dataloader.data
@@ -74,25 +71,17 @@ class PersonaGenerator(Prompter):
             inds = np.array(list(range(0, dlen)))
 
         textlist = data.iloc[inds]['question'].values
-        text_aggr = texter.TextAggregator().aggregate_n(textlist).text
+        text_aggr = texter.TextAggregator()
+        text_aggr.aggregate_n(textlist)
 
-        return text_aggr
+        return text_aggr.text
 
-    def extend_prompt(self, loc, text):
+    def extend_prompt(self, text, loc='after', spacer=' '):
+        """ Extend an existing prompt before or after.
+        """
 
-        if loc == 'prepend':
-            self.prompt = text + self.prompt
-        elif loc == 'append':
-            self.prompt += text
-
-
-def sent_tile(text):
-
-    sentences = sent_tokenize(text)
-    sent_reformatted = sentences[:1] + [' ' + s for s in sentences[1:]]
-    # sent_reformatted = sent_reformatted[::2]
-    nsent_stages = range(len(sent_reformatted))[::2]
-    tiled_sentences = [reduce(operator.add, sent_reformatted[:n+1]) for n in nsent_stages]
-
-    return tiled_sentences
+        if loc == 'before':
+            self.prompt = text + spacer + self.prompt
+        elif loc == 'after':
+            self.prompt = self.prompt + spacer + text
 
