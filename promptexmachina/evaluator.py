@@ -60,7 +60,8 @@ class AnswerCollector:
 
 class Evaluator:
 
-    def __init__(self, dataloader, colnames=['mod_ans', 'flag', 'persona', 'true_ans', 'true_ans_text']):
+    def __init__(self, dataloader, colnames=['mod_ans', 'flag', 'persona',
+                                             'true_ans', 'true_ans_text']):
 
         self.data = dataloader.data
         self.datalen = dataloader.len
@@ -77,7 +78,7 @@ class Evaluator:
         qsent = qobj.question.split('. ')[-1]
         qobj.question = qobj.question[:-len(qsent)]
         qobj.question = qobj.question + qsent
-
+        
         return qobj
 
     def evaluate(self, i, addon, model, tokenizer):

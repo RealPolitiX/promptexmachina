@@ -54,10 +54,13 @@ class Prompter:
 
 class PersonaGenerator(Prompter):
 
-    def __init__(self, prompt, key_info):
+    def __init__(self, key_info, prompt=None):
 
-        super().__init__(self, prompt)
-        self.prompt = "Write a biography of up to {} sentences for a person who may know all the answers to the following questions. Write in the second-person voice and do not use personal names. Start with 'Assume you are ...'\n".format(key_info)
+        super().__init__(prompt)
+        if prompt is None:
+            self.prompt = "Write a biography of up to {} sentences for a person who may know all the answers to the following questions. Write in the second-person voice and do not use personal names. Start with 'Assume you are ...'\n".format(key_info)
+        else:
+            self.prompt = prompt
 
     def instance_fetcher(self, dataloader, n=10):
         """ Retrieve the instances from a dataset.
