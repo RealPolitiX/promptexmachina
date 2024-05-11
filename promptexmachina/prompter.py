@@ -59,7 +59,7 @@ class PersonaGenerator(Prompter):
         else:
             self.prompt = prompt
 
-    def instance_fetcher(self, dataloader, n=10):
+    def instance_fetcher(self, dataloader, n=10, topical=False):
         """ Retrieve n instances from a dataset.
         """
         
@@ -69,6 +69,8 @@ class PersonaGenerator(Prompter):
             inds = np.random.randint(0, dlen, size=n)
         else:
             inds = np.array(list(range(0, dlen)))
+
+        # if topical:
 
         textlist = data.iloc[inds]['question'].values
         text_aggr = texter.TextAggregator()
@@ -84,4 +86,3 @@ class PersonaGenerator(Prompter):
             self.prompt = text + spacer + self.prompt
         elif loc == 'after':
             self.prompt = self.prompt + spacer + text
-

@@ -1,6 +1,7 @@
 import numpy as np
 import operator
 from functools import reduce
+import random, string
 from nltk.tokenize import sent_tokenize
 
 
@@ -22,8 +23,8 @@ class TextAggregator:
         self.text = init_text
 
     def aggregate(self, text, loc='after', spacer='\n', end_spacer='\n'):
-        """ Aggregate a single text piece.
-        """
+        ''' Attach a single text piece to the existing one.
+        '''
 
         if loc == 'before':
             self.text = text + spacer + self.text
@@ -34,8 +35,8 @@ class TextAggregator:
             self.text += end_spacer
 
     def aggregate_n(self, textlist, spacer='\n', skip_last_spacer=True, shuffle=False):
-        """ Aggregate n text pieces.
-        """
+        ''' Aggregate n text pieces.
+        '''
 
         if shuffle:
             textlist_ag = np.random.choice(textlist, size=len(textlist), replace=False).tolist()
@@ -43,6 +44,7 @@ class TextAggregator:
             textlist_ag = textlist
         
         if spacer is not None:
+            # Add spacer between sentences (skip the last sentence or not)
             if skip_last_spacer:
                 modtextlist = [t+spacer for t in textlist_ag[:-1]]
                 modtextlist += textlist_ag[-1]
@@ -65,3 +67,26 @@ class TextAggregator:
 
         return text_cumsum
 
+
+def randstr(n):
+    res = ''.join(random.choices(string.ascii_letters +
+                                 string.digits, k=n))
+    return res
+
+def rand_replace(sentence, extra=None):
+    words = sentence.split(' ')
+    nw = len(words)
+    
+    replaced_text = ''
+    for iw, word in enumerate(words):
+        nletters = len(list(word))
+        word_rep = randstr(nletters)
+        if iw < nw-1:
+            replaced_text += word_rep + ' '
+        else:
+            replaced_text += word_rep + '.'
+
+    if extra is None:
+        return replaced_text
+    else:
+        return replaced_text + extra

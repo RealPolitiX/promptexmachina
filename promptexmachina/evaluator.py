@@ -80,14 +80,15 @@ class Evaluator:
         qobj.question = qobj.question + qsent
         
         return qobj
+    
+    def evaluate(self, i, addon, model, tokenizer, model_kwargs=None):
 
-    def evaluate(self, i, addon, model, tokenizer):
-
+        if model_kwargs is None:
+            model_kwargs = {"max_new_tokens":128, "do_sample":False,
+                            "pad_token_id":tokenizer.eos_token_id}
         entry_dict = self.data.iloc[i,:].to_dict()
         qobj = self.prompt_format(entry_dict, addon)
-        answ = qobj.query(model, tokenizer, model_kwargs={"max_new_tokens":128,
-                                                        "do_sample":False,
-                                                        "pad_token_id":tokenizer.eos_token_id})
+        answ = qobj.query(model, tokenizer, model_kwargs=model_kwargs)
         answ = m.split_answer(answ)
         flag = m.soft_validate(answ, qobj.answer_idx)
 
