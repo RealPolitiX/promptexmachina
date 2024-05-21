@@ -5,22 +5,35 @@ import random, string
 from nltk.tokenize import sent_tokenize
 
 
-def sent_tile(text, per=1):
+def sent_tile(text, per=1, first=None):
 
     sentences = sent_tokenize(text)
     sent_reformatted = sentences[:1] + [' ' + s for s in sentences[1:]]
     # sent_reformatted = sent_reformatted[::2]
     nsent_stages = range(len(sent_reformatted))[::per]
     tiled_sentences = [reduce(operator.add, sent_reformatted[:n+1]) for n in nsent_stages]
-
-    return tiled_sentences
+    if first is None:
+        return tiled_sentences
+    else:
+        return [first] + tiled_sentences
 
 
 class TextAggregator:
+    ''' Text operations (aggregation, disaggregation) at the sentence level.
+    '''
 
     def __init__(self, init_text=''):
 
         self.text = init_text
+
+    @property
+    def n_sent(self):
+
+        if self.text:
+            sents = self.disaggregate()
+            return len(sents)
+        else:
+            return 0
 
     def aggregate(self, text, loc='after', spacer='\n', end_spacer='\n'):
         ''' Attach a single text piece to the existing one.
@@ -56,14 +69,35 @@ class TextAggregator:
             self.text += reduce(operator.add, textlist_ag)
 
     def disaggregate(self):
+        ''' Decompose a paragraph into sentences.
+        '''
 
         sentences = sent_tokenize(self.text)
 
         return sentences
     
-    def cumsum(self, per):
+    def keep_n(self, n, inplace=False):
+        ''' Keep the first n sentences.
+        '''
 
-        text_cumsum = sent_tile(self.text, per)
+        n = int(n)
+        sent_cumsum = self.cumsum(per=1, first=None)
+
+        if n < 1:
+            raise ValueError('n should be at least 1.')
+        elif n > self.n_sent:
+            n = self.n_sent
+
+        if inplace:
+            self.text = sent_cumsum[n-1]
+
+        return sent_cumsum[n-1]
+    
+    def cumsum(self, per, first=None):
+        ''' Cumulative summation for text at the sentence level.
+        '''
+
+        text_cumsum = sent_tile(self.text, per, first=first)
 
         return text_cumsum
 
