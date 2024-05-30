@@ -81,6 +81,13 @@ class Evaluator:
         
         return qobj
     
+    def enable_accelerator(self, name='deepspeed'):
+        
+        if name == 'deepspeed':
+            from mii import pipeline
+        else:
+            raise NotImplemented
+    
     def evaluate(self, i, addon, model, tokenizer, model_kwargs=None):
 
         if model_kwargs is None:
@@ -93,3 +100,52 @@ class Evaluator:
         flag = m.soft_validate(answ, qobj.answer_idx)
 
         return entry_dict, answ, flag
+    
+    def evalpipe(self, i, addon, model, tokenizer, pipeline, model_kwargs=None):
+
+        if model_kwargs is None:
+            model_kwargs = {"max_new_tokens":128, "do_sample":False, "pad_token_id":tokenizer.eos_token_id}
+        entry_dict = self.data.iloc[i,:].to_dict()
+        qobj = self.prompt_format(entry_dict, addon)
+        # print(qobj.full_question)
+        answ = pipeline(qobj.full_question, return_full_text=True, **model_kwargs)
+        answ = m.split_answer(answ[0].generated_text)
+        flag = m.soft_validate(answ, qobj.answer_idx)
+        
+        return entry_dict, answ, flag
+    
+
+class StudyAnalyzer:
+    ''' Analyzing optuna study instances.
+    '''
+    
+    def __init__(self, study, multiobj=False):
+
+        self.trials_df = study.trials_dataframe()
+        self.trials = study.trials
+        self.n_trials = len(self.trials)
+        if multiobj:
+            self.best_params = [t.params for t in study.best_trials]
+            self.best_value = [t.values for t in study.best_trials]
+        else:
+            self.best_params = study.best_params
+            self.best_value = study.best_value
+
+    def trial_values(self):
+        
+        return self.trials_df['value'].values
+        
+    def cummax(self, colname='value'):
+
+        return self.trials_df[colname].cummax().values
+
+    def cummin(self, colname='value'):
+
+        return self.trials_df[colname].cummin().values
+    
+    def cummean(self, colname='value'):
+        
+        objective_values = self.trials_df[colname].cumsum().values
+        indices = np.array(range(1, self.n_trials+1))
+        
+        return objective_values / indices
