@@ -3,10 +3,10 @@ from collections import OrderedDict
 from typing import Any, Callable, Dict, Optional, Sequence, Union
 import warnings
 
-# BoTorch imports
-from botorch.acquisition.objective import GenericMCObjective, ConstrainedMCObjective
-from botorch.acquisition.monte_carlo import qExpectedImprovement, qNoisyExpectedImprovement
-from botorch.acquisition.multi_objective.monte_carlo import qExpectedHypervolumeImprovement
+import torch
+from nltk.tokenize import sent_tokenize
+
+# general BoTorch imports
 from botorch.utils.transforms import normalize, unnormalize
 from botorch.models.transforms.outcome import Standardize
 from botorch.models import SingleTaskGP
@@ -14,6 +14,17 @@ from botorch.sampling.normal import SobolQMCNormalSampler
 from botorch.optim import optimize_acqf
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
+
+# BoTorch uniobjective
+from botorch.acquisition.objective import GenericMCObjective, ConstrainedMCObjective
+from botorch.acquisition.monte_carlo import qExpectedImprovement, qNoisyExpectedImprovement
+from botorch.acquisition.analytic import ExpectedImprovement
+
+# BoTorch multiobjective
+from botorch.acquisition.multi_objective.monte_carlo import qExpectedHypervolumeImprovement, qNoisyExpectedHypervolumeImprovement
+from botorch.acquisition.multi_objective.objective import IdentityMCMultiOutputObjective
+from botorch.utils.multi_objective.box_decompositions import NondominatedPartitioning
+from botorch.utils.multi_objective.scalarization import get_chebyshev_scalarization
 
 # optuna imports
 from optuna import logging
@@ -25,9 +36,6 @@ from optuna.study import Study
 from optuna.study import StudyDirection
 from optuna.trial import FrozenTrial
 from optuna.trial import TrialState
-
-import torch
-from nltk.tokenize import sent_tokenize
 
 # persona
 persona_dict = {}
@@ -116,13 +124,20 @@ def qei_candidates_func(train_x: "torch.Tensor", train_obj: "torch.Tensor",
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
     fit_gpytorch_mll(mll)
 
-    acqf = qExpectedImprovement(
-        model=model,
-        best_f=best_f,
-        sampler=SobolQMCNormalSampler(sample_shape=torch.Size([512])),
-        objective=objective,
-        X_pending=pending_x,
-    )
+    acqf_type = acqf_dict.pop('acqf_type', 'qmc')
+    if acqf_type == 'qmc':
+        acqf = qExpectedImprovement(
+            model=model,
+            best_f=best_f,
+            sampler=SobolQMCNormalSampler(sample_shape=torch.Size([512])),
+            objective=objective,
+            X_pending=pending_x,
+        )
+    elif acqf_type == 'analytic':
+        acqf = ExpectedImprovement(
+            model=model,
+            best_f = best_f,
+        )
 
     standard_bounds = torch.zeros_like(bounds)
     standard_bounds[1] = 1
@@ -194,11 +209,11 @@ def qnei_candidates_func(train_x: "torch.Tensor", train_obj: "torch.Tensor",
         is_feas = (train_con <= 0).all(dim=-1)
         train_obj_feas = train_obj[is_feas]
 
-        if train_obj_feas.numel() == 0:
-            # TODO(hvy): Do not use 0 as the best observation.
-            best_f = torch.zeros(())
-        else:
-            best_f = train_obj_feas.max()
+        # if train_obj_feas.numel() == 0:
+        #     # TODO(hvy): Do not use 0 as the best observation.
+        #     best_f = torch.zeros(())
+        # else:
+        #     best_f = train_obj_feas.max()
 
         constraints = []
         n_constraints = train_con.size(1)
@@ -211,7 +226,8 @@ def qnei_candidates_func(train_x: "torch.Tensor", train_obj: "torch.Tensor",
     else:
         train_y = train_obj
 
-        best_f = train_obj.max()
+        # best_f = train_obj.max()
+
 
         objective = None  # Using the default identity objective.
 
@@ -225,7 +241,7 @@ def qnei_candidates_func(train_x: "torch.Tensor", train_obj: "torch.Tensor",
 
     acqf = qNoisyExpectedImprovement(
         model=model,
-        best_f=best_f,
+        X_baseline=train_x,
         sampler=SobolQMCNormalSampler(sample_shape=torch.Size([512])),
         objective=objective,
         X_pending=pending_x,
@@ -234,6 +250,188 @@ def qnei_candidates_func(train_x: "torch.Tensor", train_obj: "torch.Tensor",
     standard_bounds = torch.zeros_like(bounds)
     standard_bounds[1] = 1
 
+    # Unpack parameters for the acquisition function
+    acqf_bounds = acqf_dict.pop('bounds', standard_bounds)
+    q = acqf_dict.pop('q', 1)
+    num_restarts = acqf_dict.pop('num_restarts', 1)
+    raw_samples = acqf_dict.pop('raw_samples', 10)
+    maxiter = acqf_dict.pop('maxiter', 100)
+    sequential = acqf_dict.pop('sequential', True)
+    options = acqf_dict or {} # Leave the rest for options
+    
+    candidates, _ = optimize_acqf(
+        acq_function=acqf,
+        bounds=acqf_bounds,
+        q=q,
+        num_restarts=num_restarts,
+        raw_samples=raw_samples,
+        options=options,
+        sequential=sequential,
+    )
+
+    candidates = unnormalize(candidates.detach(), bounds=bounds)
+
+    return candidates
+
+
+def qehvi_candidates_func(train_x: "torch.Tensor", train_obj: "torch.Tensor",
+    train_con: Optional["torch.Tensor"], bounds: "torch.Tensor",
+    pending_x: Optional["torch.Tensor"], acqf_dict:Dict={},) -> "torch.Tensor":
+    """Quasi MC-based batch Expected Hypervolume Improvement (qEHVI).
+
+    The default value of ``candidates_func`` in :class:`~optuna.integration.BoTorchSampler`
+    with multi-objective optimization when the number of objectives is three or less.
+
+    .. seealso::
+        :func:`~optuna.integration.botorch.qei_candidates_func` for argument and return value
+        descriptions.
+    """
+
+    n_objectives = train_obj.size(-1)
+
+    if train_con is not None:
+        train_y = torch.cat([train_obj, train_con], dim=-1)
+
+        is_feas = (train_con <= 0).all(dim=-1)
+        train_obj_feas = train_obj[is_feas]
+
+        constraints = []
+        n_constraints = train_con.size(1)
+
+        for i in range(n_constraints):
+            constraints.append(lambda Z, i=i: Z[..., -n_constraints + i])
+        
+        additional_qehvi_kwargs = {
+            "objective": IdentityMCMultiOutputObjective(outcomes=list(range(n_objectives))),
+            "constraints": constraints,
+        }
+    else:
+        train_y = train_obj
+        train_obj_feas = train_obj
+        additional_qehvi_kwargs = {}
+
+    train_x = normalize(train_x, bounds=bounds)
+    if pending_x is not None:
+        pending_x = normalize(pending_x, bounds=bounds)
+
+    model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=train_y.shape[-1]))
+    mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    fit_gpytorch_mll(mll)
+
+    # Approximate box decomposition similar to Ax when the number of objectives is large.
+    # https://github.com/facebook/Ax/blob/master/ax/models/torch/botorch_moo_defaults
+    if n_objectives > 4:
+        alpha = 10 ** (-8 + n_objectives)
+    else:
+        alpha = 0.0
+
+    ref_point = train_obj.min(dim=0).values - 1e-8
+
+    partitioning = NondominatedPartitioning(ref_point=ref_point, Y=train_obj_feas, alpha=alpha)
+
+    ref_point_list = ref_point.tolist()
+
+    acqf = qExpectedHypervolumeImprovement(
+        model=model,
+        ref_point=ref_point_list,
+        partitioning=partitioning,
+        sampler=SobolQMCNormalSampler(sample_shape=torch.Size([512])),
+        X_pending=pending_x,
+        **additional_qehvi_kwargs,
+    )
+
+    standard_bounds = torch.zeros_like(bounds)
+    standard_bounds[1] = 1
+    
+    # Unpack parameters for the acquisition function
+    acqf_bounds = acqf_dict.pop('bounds', standard_bounds)
+    q = acqf_dict.pop('q', 1)
+    num_restarts = acqf_dict.pop('num_restarts', 1)
+    raw_samples = acqf_dict.pop('raw_samples', 10)
+    maxiter = acqf_dict.pop('maxiter', 100)
+    sequential = acqf_dict.pop('sequential', True)
+    options = acqf_dict or {} # Leave the rest for options
+    
+    candidates, _ = optimize_acqf(
+        acq_function=acqf,
+        bounds=acqf_bounds,
+        q=q,
+        num_restarts=num_restarts,
+        raw_samples=raw_samples,
+        options=options,
+        sequential=sequential,
+    )
+
+    candidates = unnormalize(candidates.detach(), bounds=bounds)
+
+    return candidates
+
+
+def qnehvi_candidates_func(train_x: "torch.Tensor", train_obj: "torch.Tensor",
+    train_con: Optional["torch.Tensor"], bounds: "torch.Tensor",
+    pending_x: Optional["torch.Tensor"], acqf_dict:Dict={},) -> "torch.Tensor":
+    """Quasi MC-based batch Expected Hypervolume Improvement (qEHVI).
+
+    The default value of ``candidates_func`` in :class:`~optuna.integration.BoTorchSampler`
+    with multi-objective optimization when the number of objectives is three or less.
+
+    .. seealso::
+        :func:`~optuna.integration.botorch.qei_candidates_func` for argument and return value
+        descriptions.
+    """
+
+    n_objectives = train_obj.size(-1)
+
+    if train_con is not None:
+        train_y = torch.cat([train_obj, train_con], dim=-1)
+
+        n_constraints = train_con.size(1)
+        additional_qnehvi_kwargs = {
+            "objective": IdentityMCMultiOutputObjective(outcomes=list(range(n_objectives))),
+            "constraints": [
+                (lambda Z, i=i: Z[..., -n_constraints + i]) for i in range(n_constraints)
+            ],
+        }
+    else:
+        train_y = train_obj
+
+        additional_qnehvi_kwargs = {}
+
+    train_x = normalize(train_x, bounds=bounds)
+    if pending_x is not None:
+        pending_x = normalize(pending_x, bounds=bounds)
+
+    model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=train_y.shape[-1]))
+    mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    fit_gpytorch_mll(mll)
+
+    # Approximate box decomposition similar to Ax when the number of objectives is large.
+    # https://github.com/pytorch/botorch/blob/36d09a4297c2a0ff385077b7fcdd5a9d308e40cc/botorch/acquisition/multi_objective/utils.py#L46-L63
+    if n_objectives > 4:
+        alpha = 10 ** (-8 + n_objectives)
+    else:
+        alpha = 0.0
+
+    ref_point = train_obj.min(dim=0).values - 1e-8
+
+    ref_point_list = ref_point.tolist()
+
+    # prune_baseline=True is generally recommended by the documentation of BoTorch.
+    # cf. https://botorch.org/api/acquisition.html (accessed on 2022/11/18)
+    acqf = qNoisyExpectedHypervolumeImprovement(
+        model=model,
+        ref_point=ref_point_list,
+        X_baseline=train_x,
+        alpha=alpha,
+        prune_baseline=True,
+        sampler=SobolQMCNormalSampler(sample_shape=torch.Size([256])),
+        X_pending=pending_x,
+        **additional_qnehvi_kwargs,
+    )
+
+    standard_bounds = torch.zeros_like(bounds)
+    standard_bounds[1] = 1
+    
     # Unpack parameters for the acquisition function
     acqf_bounds = acqf_dict.pop('bounds', standard_bounds)
     q = acqf_dict.pop('q', 1)
